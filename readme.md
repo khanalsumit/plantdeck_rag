@@ -1,3 +1,6 @@
+
+---
+
 # PlantDeck – Offline Herbal RAG
 
 I built **PlantDeck** so I can take my herbal PDFs off-grid and still ask smart, grounded questions about plant uses, preparations, and safety—without sending anything to the cloud. It runs entirely on my machine (Windows in my case), uses my **local PDFs** as the single source of truth, and answers with page-level citations (and images) using a **local LLM via Ollama**.
@@ -126,6 +129,186 @@ Then I open **[http://localhost:8088/](http://localhost:8088/)** — it redirect
   * “What are the uses and cautions of ginger?”
   * “Is yarrow poisonous?”
   * “How do I prepare peppermint for indigestion?”
+
+---
+
+## Docker usage & recommended settings
+
+I ship a hardened Docker setup so I can run PlantDeck without polluting my host machine, and keep private data (PDFs, DB, images) **outside** the image.
+
+### What’s inside the image
+
+* Base: `python:3.11-slim`
+* System deps: `tesseract-ocr` (+ `eng` data), `poppler-utils` (for optional `pdf2image` fallback)
+* Runs as a **non-root user** by default
+* Healthcheck hitting `/health`
+* No large data baked in (code only)
+
+### Quick start
+
+```bash
+# build the image
+docker compose build
+
+# run the API + UI at http://localhost:8088/
+docker compose up -d
+
+# tail logs
+docker compose logs -f
+```
+
+> On Linux without Docker Desktop, if `host.docker.internal` isn’t available, add:
+>
+> ```yaml
+> extra_hosts:
+>   - "host.docker.internal:host-gateway"
+> ```
+>
+> or set `OLLAMA_URL` to your host IP.
+
+### Volumes (bind mounts)
+
+I keep all large and private data on the host and mount it into the container:
+
+* `./pdfs` → `/app/pdfs` (**read-only**)
+* `./build` → `/app/build` (read-write)
+* `./images` → `/app/images` (read-write)
+* `./data` → `/app/data` (read-write)
+* `./models` → `/app/models` (optional SentenceTransformer cache, read-write)
+* `./app/static` → `/app/app/static` (so I can edit the UI live, read-only)
+
+These match the default `docker-compose.yml`.
+
+### Environment variables
+
+* `OLLAMA_URL` (default in image: `http://host.docker.internal:11434`)
+* `OLLAMA_MODEL` (default in image: `llama3:latest`)
+* (Optional) `SENTENCE_TRANSFORMERS_HOME=/app/models` if I want to cache models inside the `models/` volume.
+
+### Security hardening (what I use)
+
+* **Non-root user** in the image (`appuser` uid 10001)
+* **Read-only root filesystem** in Compose:
+
+  ```yaml
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  ```
+* Only the mounted data dirs are writable. This blocks accidental writes elsewhere and reduces blast radius.
+
+> If I hit permission issues on Linux host volumes (because the container user is `10001`), either:
+>
+> * `chown -R 10001:100 <folders>`, or
+> * relax permissions: `chmod -R u+rwX,g+rwX <folders>`
+
+### Networking
+
+* The container talks to my **local Ollama** on the host via `http://host.docker.internal:11434`.
+* On Linux without Docker Desktop, use `extra_hosts` (above) or point `OLLAMA_URL` to the host IP.
+
+### Healthcheck
+
+The Dockerfile includes a healthcheck that pings `http://127.0.0.1:8088/health`. I can see `healthy` once the API is up:
+
+```bash
+docker inspect --format='{{json .State.Health}}' plantdeck | jq
+```
+
+### Production-ish tips
+
+* Pin a model I actually have locally, e.g.:
+
+  ```yaml
+  environment:
+    - OLLAMA_MODEL=mistral:latest
+  ```
+* Resource limits (optional):
+
+  ```yaml
+  deploy:
+    resources:
+      limits:
+        cpus: '4'
+        memory: 6g
+  ```
+* Keep the image small by **not** copying data into it; everything is mounted.
+* If I want more OCR languages, extend the image and install `tesseract-ocr-<lang>` (e.g., `tesseract-ocr-deu`).
+
+### Typical container workflow
+
+```bash
+# 1) Extract (OCR inside container)
+docker compose exec plantdeck bash -lc \
+  "python tools/extract_pdfs.py --ocr --dpi 300 --lang eng"
+
+# 2) Build structured data + indexes
+docker compose exec plantdeck bash -lc \
+  "python tools/structure_plants.py && \
+   python tools/build_sqlite.py && \
+   python tools/build_index.py && \
+   python tools/build_page_index.py"
+
+# 3) Browse http://localhost:8088/ (Deep search toggle in the UI)
+```
+
+### Troubleshooting
+
+* **403/connection refused to Ollama** → verify `OLLAMA_URL` and that Ollama is running on the host.
+* **No images in UI** → confirm `images/` has PNGs and `build/raw_pages.jsonl` contains `images` arrays; `/health` should say `"images_available": true`.
+* **Permission denied on writes** → I’m running with `read_only: true`. Only `/tmp` and bind mounts are writable; ensure `build/`, `images/`, `data/` are mounted and writable by the container user.
+* **Slow first run** → SentenceTransformer downloads its weights; I mount `./models` so it caches.
+
+---
+
+## CI/CD (GitHub Actions)
+
+I wired up Actions so every push/PR runs lint + Docker build, and release tags publish a container image to GHCR (GitHub Container Registry).
+
+### Workflows
+
+* `.github/workflows/ci.yml` (runs on push/PR to `main`)
+
+  * Python lint: **ruff** + **black**
+  * Security lint: **bandit** (informational)
+  * **Docker build** with Buildx (no push, just ensures Dockerfile stays healthy)
+  * Optional **Trivy** filesystem scan of the repo (critical/high)
+
+* `.github/workflows/docker-publish.yml` (runs on tags like `v0.1.0`, or manual dispatch)
+
+  * Logs in to **GHCR** with the built-in `GITHUB_TOKEN`
+  * Builds and **pushes**:
+
+    * `ghcr.io/EzioDEVio/plantdeck_rag:<version>`
+    * `ghcr.io/EzioDEVio/plantdeck_rag:<short-sha>`
+    * `ghcr.io/EzioDEVio/plantdeck_rag:latest`
+  * Optional **Trivy** image scan after push
+
+* (Optional) `.github/dependabot.yml`
+
+  * Weekly bumps for Actions and pip dependencies
+
+### How I use it
+
+* CI runs automatically on push/PR.
+* To publish a versioned image:
+
+  ```bash
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+
+  Then pull it anywhere with:
+
+  ```bash
+  docker pull ghcr.io/EzioDEVio/plantdeck_rag:v0.1.0
+  ```
+
+> First time you publish, check **Repo → Settings → Packages** and make sure the package visibility is what you want (public/private).
 
 ---
 
@@ -265,19 +448,14 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8088/ask `
   $env:TESSDATA_PREFIX = "$HOME\tools\tesseract-portable\tessdata"
   & $env:TESSERACT_EXE --version
   ```
-
 * **Huge console spam (MuPDF warnings)**
   I mute them inside the extractor; detailed issues go to `build\extract.log`.
-
 * **`UnicodeDecodeError` with Tesseract output**
   I fixed it by **reading stdout as bytes** and decoding UTF-8 manually in the extractor.
-
 * **UI shows “Not Found”**
   Use the server in this repo (`app/server.py`), which auto-mounts `/ui/` and redirects `/` → `/ui/`.
-
 * **No images in the UI**
   Make sure `images/` has PNGs and `build/raw_pages.jsonl` has `images` arrays. The server mounts `/images`, and `/ask` returns image URLs in `page_context`.
-
 * **Sparse answers**
   Ensure you’ve run `build_page_index.py` and the header says **Deep: on** in `/health`.
 
