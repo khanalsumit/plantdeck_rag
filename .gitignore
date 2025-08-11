@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# App artifacts / local data
+build/
+images/
+data/
+models/
+pdfs/
+*.npy
+*.pkl
+*.log
+
+# Frontend cruft (future-proof)
+dist/
+node_modules/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

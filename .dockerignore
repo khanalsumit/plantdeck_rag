@@ -1,0 +1,23 @@
+# Ignore everything we generate or that is private/large
+.venv/
+.env
+.env.*
+__pycache__/
+*.pyc
+
+# Local data / artifacts
+build/
+images/
+data/
+models/
+pdfs/
+
+# Node/web artifacts (future-proof)
+dist/
+node_modules/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

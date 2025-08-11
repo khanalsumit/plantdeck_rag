@@ -1,0 +1,184 @@
+<!doctype html>
+<meta charset="utf-8"/>
+<title>PlantDeck – Offline Herbal RAG</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#0b0c0f; --card:#111319; --muted:#9aa4b2; --text:#e7ecf2;
+    --accent:#7cd4ff; --accent2:#8cffc1; --warn:#ffd166;
+  }
+  *{box-sizing:border-box}
+  body{ margin:0; background:linear-gradient(180deg,#0b0c0f 0%, #0d1117 100%); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; color:var(--text); }
+  header{padding:24px 16px; border-bottom:1px solid #1b2030;}
+  .wrap{max-width:1000px; margin:0 auto; padding:0 12px;}
+  h1{margin:0 0 8px; font-size:26px}
+  .sub{color:var(--muted); font-size:14px}
+  .search{ display:flex; gap:10px; margin:18px 0 12px; align-items:center; }
+  input[type=text]{ flex:1; padding:12px 14px; border-radius:10px; border:1px solid #2a3244; background:#0f1420; color:var(--text); outline:none; }
+  .toggle{display:flex; align-items:center; gap:6px; color:var(--muted); font-size:14px; user-select:none}
+  button{ padding:12px 16px; border-radius:10px; border:0; cursor:pointer; background:linear-gradient(90deg, var(--accent) 0%, var(--accent2) 100%); color:#0a0f14; font-weight:600; }
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 18px}
+  .chip{padding:8px 10px; border-radius:999px; border:1px solid #2a3244; color:#cfd6df; cursor:pointer}
+  .chip:hover{border-color:#3a445c}
+  .grid{display:grid; grid-template-columns:1fr; gap:16px}
+  @media (min-width:900px){ .grid{grid-template-columns:1fr 1fr} }
+  .card{ background:rgba(17,19,25,0.8); border:1px solid #22283a; border-radius:16px; padding:16px; box-shadow:0 5px 22px rgba(0,0,0,0.35); }
+  .answer{white-space:pre-wrap; line-height:1.45}
+  .muted{color:var(--muted)}
+  .badge{display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #2a3244; color:#cfd6df; margin-right:6px}
+  .warn{ background:rgba(255,209,102,0.1); border:1px dashed #5a4a1c; color:#ffe8a6; padding:10px 12px; border-radius:12px; margin-bottom:10px }
+  .spinner{display:none; gap:8px; align-items:center; color:var(--muted); font-size:14px}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--accent); animation:b 1.2s infinite}
+  .dot:nth-child(2){animation-delay:.15s}
+  .dot:nth-child(3){animation-delay:.3s}
+  @keyframes b{0%{transform:translateY(0)}50%{transform:translateY(-4px)}100%{transform:translateY(0)}}
+  .snippet{margin:8px 0; padding:10px; border:1px solid #2a3244; border-radius:10px; color:#cfd6df; background:#0f1420}
+  .kicker{color:#93e0ff; font-weight:600; font-size:13px; margin-bottom:6px}
+  .imggrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px}
+  .imggrid a{display:block}
+  .imggrid img{width:100%; height:120px; object-fit:cover; border-radius:12px; border:1px solid #2a3244; background:#0f1420}
+</style>
+
+<header>
+  <div class="wrap">
+    <h1>PlantDeck – Offline Herbal RAG</h1>
+    <div class="sub">Ask about a plant’s uses, preparations, and safety. Answers are grounded in your local PDFs.</div>
+    <div class="search">
+      <input id="q" type="text" placeholder="Ask about a plant… e.g., Uses and cautions of ginger" />
+      <label class="toggle"><input type="checkbox" id="deep"> Deep search</label>
+      <button id="askBtn" onclick="ask()">Ask</button>
+    </div>
+    <div class="chips">
+      <span class="chip" onclick="setQ('What are the uses and cautions of ginger?')">Ginger uses + cautions</span>
+      <span class="chip" onclick="setQ('Is yarrow poisonous?')">Is yarrow poisonous?</span>
+      <span class="chip" onclick="setQ('How do I prepare peppermint for indigestion?')">Peppermint prep</span>
+    </div>
+    <div class="spinner" id="spin"><span class="dot"></span><span class="dot"></span><span class="dot"></span> Thinking…</div>
+  </div>
+</header>
+
+<main class="wrap" style="margin-bottom:48px">
+  <div class="card" style="margin-top:16px">
+    <div class="warn">Field guide only; not medical advice. Verify with the original PDF citations before use.</div>
+    <div id="answer" class="answer muted">Type a question above and press <b>Ask</b>.</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin-top:0">Top matches</h3>
+      <div id="hits" class="muted">—</div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Citations</h3>
+      <div id="cites" class="muted">—</div>
+    </div>
+  </div>
+
+  <div class="card" id="snipCard" style="display:none">
+    <div class="kicker">Source snippets</div>
+    <div id="snippets" class="muted">—</div>
+  </div>
+
+  <div class="card" id="imgCard" style="display:none">
+    <div class="kicker">Images from cited pages</div>
+    <div id="imgs" class="imggrid"></div>
+  </div>
+</main>
+
+<script>
+const qEl = document.getElementById('q');
+qEl.addEventListener('keydown', (e)=>{ if(e.key==='Enter') ask(); });
+
+// remember deep toggle
+const deepEl = document.getElementById('deep');
+deepEl.checked = localStorage.getItem('plantdeck_deep') === '1';
+deepEl.addEventListener('change', ()=> localStorage.setItem('plantdeck_deep', deepEl.checked?'1':'0'));
+
+async function ask(){
+  const q = qEl.value.trim();
+  if(!q) return;
+  const btn = document.getElementById('askBtn');
+  const spin = document.getElementById('spin');
+  const deep = deepEl.checked;
+  btn.disabled = true; spin.style.display='inline-flex';
+  try {
+    const res = await fetch('/ask', {
+      method:'POST',
+      headers:{'Content-Type': 'application/json'},
+      body: JSON.stringify({ q, deep, k_pages: 8 })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Request failed');
+
+    // answer
+    document.getElementById('answer').classList.remove('muted');
+    document.getElementById('answer').textContent = data.answer || '(No answer returned)';
+
+    // species hits
+    const hits = (data.hits||[]).map(h =>
+      `<span class="badge">${escapeHtml(h.latin_name)} · ${h.score.toFixed(3)}</span>`
+    ).join(' ');
+    document.getElementById('hits').innerHTML = hits || '—';
+
+    // citations: merge species citations + page context
+    const cites = [];
+    (data.context||[]).forEach(d => (d.citations||[]).forEach(c => {
+      cites.push(`${escapeHtml(c.pdf)} p${c.page}`);
+    }));
+    (data.page_context||[]).forEach(s => cites.push(`${escapeHtml(s.pdf)} p${s.page}`));
+    document.getElementById('cites').textContent = cites.length ? cites.join('  ·  ') : '—';
+
+    // snippets (only when deep search)
+    const snipCard = document.getElementById('snipCard');
+    const snipsEl = document.getElementById('snippets');
+    if (deep && (data.page_context||[]).length){
+      snipCard.style.display = '';
+      snipsEl.innerHTML = (data.page_context||[]).map(s =>
+        `<div class="snippet"><b>${escapeHtml(s.pdf)} p${s.page}</b><br>${escapeHtml(s.snippet||'')}</div>`
+      ).join('');
+    } else {
+      snipCard.style.display = 'none';
+      snipsEl.textContent = '—';
+    }
+
+    // images (flatten unique list from page_context)
+    const imgCard = document.getElementById('imgCard');
+    const imgsEl = document.getElementById('imgs');
+    const imgSet = new Set();
+    (data.page_context||[]).forEach(s => (s.images||[]).forEach(u => imgSet.add(u)));
+    const allImgs = Array.from(imgSet);
+    if(allImgs.length){
+      imgCard.style.display = '';
+      imgsEl.innerHTML = allImgs.slice(0, 18).map(src =>
+        `<a href="${src}" target="_blank" rel="noopener"><img loading="lazy" src="${src}"/></a>`
+      ).join('');
+    } else {
+      imgCard.style.display = 'none';
+      imgsEl.innerHTML = '';
+    }
+  } catch(e){
+    document.getElementById('answer').classList.remove('muted');
+    document.getElementById('answer').textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false; spin.style.display='none';
+  }
+}
+
+function setQ(example){ qEl.value = example; qEl.focus(); }
+
+function escapeHtml(s){
+  return (s||'').toString().replace(/[&<>"']/g, m => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]
+  ));
+}
+
+// Show model + deep availability
+fetch('/health').then(r=>r.json()).then(j=>{
+  const sub = document.querySelector('.sub');
+  const bits = [];
+  if(j && j.model) bits.push(`Model: ${j.model}`);
+  if(j && typeof j.deep_available !== 'undefined') bits.push(j.deep_available ? 'Deep: on' : 'Deep: unavailable');
+  if(j && j.images_available) bits.push('Images: on');
+  if(bits.length) sub.innerHTML += ' <span class="badge">' + bits.join(' · ') + '</span>';
+}).catch(()=>{});
+</script>

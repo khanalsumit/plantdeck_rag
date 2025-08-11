@@ -1,0 +1,13 @@
+headings:
+  latin_name: ["Botanical name", "Latin name", "Scientific name", "Botanical:"]
+  common_names: ["Common names", "Common name", "Also called", "Vernacular"]
+  family: ["Family"]
+  id_features: ["Identification", "Description", "ID features", "Morphology"]
+  parts_used: ["Parts used", "Part used"]
+  constituents: ["Constituents", "Actives", "Phytochemicals"]
+  actions: ["Actions", "Pharmacological actions", "Activity"]
+  uses: ["Uses", "Indications", "Applications", "Therapeutic uses"]
+  preparations: ["Preparation", "Preparations", "How to use"]
+  dosage: ["Dose", "Dosage"]
+  safety: ["Safety", "Contraindications", "Precautions", "Adverse effects", "Toxicity"]
+  lookalikes: ["Look-alikes", "Similar species", "Confusions"]
